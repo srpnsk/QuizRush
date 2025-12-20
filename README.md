@@ -53,13 +53,14 @@ After connecting, the player will receive a welcome message and can start answer
 ## 🎮 How to Play
 1. The server waits for players for a limited time (CONNECT_TIMEOUT)
 2. Players enter their names (If a player does not enter a name in time, the connection is closed)
-3. Once all players are connected, the quiz starts
-4. Each question is sent to all players
-5. Players enter their answers in the terminal
-6. After each round, the server sends updated scores
-7. After the last question, final results are displayed
+3. Once all players are connected, the quiz starts.
+4. Each question is sent to all players.
+5. Players enter their answers in the terminal.
+6. After each round, the server sends updated scores.
+7. After the last question, final results are displayed.
 
 ## 🚀 Planned Features
-1. Player Accounts (Very unlikely)
+1. Automaticly finding free port.
+2. Player Accounts (Very unlikely)
     - Optional feature to have personal accounts with username, password, and statistics.
     - Track progress and performance across multiple games.
