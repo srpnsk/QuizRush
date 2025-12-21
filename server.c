@@ -41,6 +41,7 @@ typedef struct Player{
     int answer;               // ответ
     int answer_time;          // время ответа
     int ready;
+    int connected;
     struct Player *next;      // следующий игрок в списке
 } Player;
 
@@ -70,6 +71,7 @@ Player* add_player(Player *head, int sock, const char *name, int id) {
     p->score = 0;
     p->answered = 0;
     p->ready = 0;
+    p->connected = 1;
     p->next = NULL;
 
     if (!head) return p;
@@ -116,6 +118,28 @@ void handle_sigint(int sig) {
     free(questions);
     exit(0);
 }
+
+Player* cleanup_disconnected(Player *head) {
+    Player *cur = head;
+    Player *prev = NULL;
+
+    while (cur) {
+        if (!cur->connected) {
+            Player *dead = cur;
+            if (prev) prev->next = cur->next;
+            else head = cur->next;
+
+            cur = cur->next;
+            close(dead->sock);
+            free(dead);
+        } else {
+            prev = cur;
+            cur = cur->next;
+        }
+    }
+    return head;
+}
+
 
 // Отправка сообщения всем игрокам, кроме указанных
 void send_to_all_except(Player *head, const char *msg, int exclude_id) {
@@ -274,7 +298,7 @@ void send_question(Player* head, int q_index) {
 int all_players_answered(Player *head) {
     Player *cur = head;
     while (cur) {
-        if (!cur->answered) {  // если игрок не ответил
+        if (cur->connected && !cur->answered) {  // если игрок не ответил
             return 0;
         }
         cur = cur->next;
@@ -319,7 +343,7 @@ void process_round(Player *head, int q_index) {
         // Считаем активных игроков
         int active_players = 0;
         Player *cur = head;
-        while (cur) { if (!cur->answered) active_players++; cur = cur->next; }
+        while (cur) { if (cur->connected && !cur->answered) active_players++; cur = cur->next; }
 
         if (active_players == 0 || (int)(now - round_start) >= TIME_PER_QUESTION) {
             round_active = 0;
@@ -338,7 +362,7 @@ void process_round(Player *head, int q_index) {
         cur = head;
         int pidx = 0;
         while (cur) {
-            if (!cur->answered) {
+            if (cur->connected && !cur->answered) {
                 fds[idx].fd = cur->sock;
                 fds[idx].events = POLLIN;
                 players_list[pidx++] = cur;
@@ -416,7 +440,8 @@ void process_round(Player *head, int q_index) {
                     }
                 } else if (n == 0) {  // Игрок отключился
                     printf("[%s] отключился\n", cur->name);
-                    head = remove_player(head, cur->sock);
+                    cur->connected = 0;
+                    cur->answered = 1; // чтобы не блокировал раунд
                 } else if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
                     perror("recv");
                 }
@@ -802,6 +827,7 @@ int main() {
 
 
         process_round(head, q);
+        head = cleanup_disconnected(head);
         send_results(head, q);
         sleep(2);
     }
