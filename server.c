@@ -145,12 +145,30 @@ Player* cleanup_disconnected(Player *head) {
 void send_to_all_except(Player *head, const char *msg, int exclude_id) {
     Player *cur = head;
     while (cur) {
-        if (cur->id != exclude_id) {
-            send(cur->sock, msg, strlen(msg), 0);
+        if (cur->connected && cur->id != exclude_id) {
+            ssize_t s = send(cur->sock, msg, strlen(msg), 0);
+            if (s <= 0) {
+                cur->connected = 0;
+            }
         }
         cur = cur->next;
     }
 }
+
+void notify_about_disconnected(Player *head) {
+    Player *cur = head;
+    char msg[256];
+
+    while (cur) {
+        if (!cur->connected) {
+            snprintf(msg, sizeof(msg),
+                     "[%s] покинул игру\n", cur->name);
+            send_to_all_except(head, msg, cur->id);
+        }
+        cur = cur->next;
+    }
+}
+
 
 void send_to_pending(PendingPlayer *pending, int count, const char *msg) {
     for (int i = 0; i < count; i++) {
@@ -430,7 +448,11 @@ void process_round(Player *head, int q_index) {
                                          "\nНеправильно. Правильный ответ: %d) %s\n",
                                          questions[q_index].correct_option,
                                          questions[q_index].options[questions[q_index].correct_option - 1]);
-                            send(cur->sock, result_msg, strlen(result_msg), 0);
+                            ssize_t s = send(cur->sock, result_msg, strlen(result_msg), 0);
+                            if (s <= 0) {
+                                printf("[%s] отключился между раундами\n", cur->name);
+                                cur->connected = 0;
+                            }
 
                             printf("[%s] ответил за %d сек (%s, +%d)\n",
                                    cur->name, time_spent,
@@ -459,8 +481,12 @@ void process_round(Player *head, int q_index) {
                     "Правильный ответ: %d) %s\n\n",
                     questions[q_index].correct_option,
                     questions[q_index].options[questions[q_index].correct_option - 1]);
-
-            send(cur->sock, timeout_msg, strlen(timeout_msg), 0);
+            ssize_t s = send(cur->sock, timeout_msg, strlen(timeout_msg), 0);
+            if (s <= 0) {
+                printf("[%s] отключился между раундами\n", cur->name);
+                cur->connected = 0;
+            }
+            
         }
         cur = cur->next;
     }
@@ -537,7 +563,11 @@ void send_results(Player *head, int q_index) {
     // Отправляем всем игрокам
     Player *cur = head;
     while (cur) {
-        send(cur->sock, buffer, strlen(buffer), 0);
+        ssize_t s = send(cur->sock, buffer, strlen(buffer), 0);
+        if (s <= 0) {
+            printf("[%s] отключился между раундами\n", cur->name);
+            cur->connected = 0;
+        }
         cur = cur->next;
     }
 
@@ -645,6 +675,7 @@ int main() {
     if (server_fd < 0) { perror("socket"); exit(1); }
 
     signal(SIGINT, handle_sigint);
+    signal(SIGPIPE, SIG_IGN);
 
     int opt = 1;
     setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
@@ -827,8 +858,11 @@ int main() {
 
 
         process_round(head, q);
+        notify_about_disconnected(head);
         head = cleanup_disconnected(head);
         send_results(head, q);
+        notify_about_disconnected(head);
+        head = cleanup_disconnected(head);
         sleep(2);
     }
 
