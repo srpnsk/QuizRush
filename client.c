@@ -6,10 +6,21 @@
 #include <poll.h>
 #include <errno.h>
 #include <netdb.h>
+#include <ctype.h>
 
 #define SERVER_PORT 5000
 #define MAX_NAME_LEN 50
 #define BUFFER_SIZE 4096
+
+// Функция проверки, что строка содержит только латиницу
+int is_latin(const char *str) {
+    for (int i = 0; str[i]; i++) {
+        char c = str[i];
+        if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z'))) return 0;
+    }
+    return 1;
+}
+
 
 int main(int argc, char *argv[]) {
     if (argc != 2) {
@@ -49,9 +60,26 @@ int main(int argc, char *argv[]) {
     }
 
 
-    printf("Введите ваше имя: ");
-    fgets(name, sizeof(name), stdin);
-    name[strcspn(name, "\n")] = 0;
+    do {
+        printf("Введите ваше имя: ");
+        if (fgets(name, sizeof(name), stdin) == NULL) {
+            printf("Ошибка ввода.\n");
+            return 1;
+        }
+        name[strcspn(name, "\n")] = 0;  // удаляем \n
+
+        if (strlen(name) == 0) {
+            printf("Имя не может быть пустым!\n");
+            continue;
+        }
+
+        if (!is_latin(name)) {
+            printf("Имя должно содержать только латинские буквы!\n");
+            continue;
+        }
+
+        break; // имя валидно
+    } while (1);
 
     // Отправляем имя серверу
     send(sock, name, strlen(name), 0);
