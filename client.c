@@ -56,8 +56,6 @@ int main(int argc, char *argv[]) {
     // Отправляем имя серверу
     send(sock, name, strlen(name), 0);
 
-    printf("Подключение установлено! Ожидаем вопросы...\n");
-
     struct pollfd fds[2];
     fds[0].fd = STDIN_FILENO;
     fds[0].events = POLLIN;

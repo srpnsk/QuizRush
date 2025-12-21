@@ -40,6 +40,7 @@ typedef struct Player{
     int answered;             // ответил ли за раунд
     int answer;               // ответ
     int answer_time;          // время ответа
+    int ready;
     struct Player *next;      // следующий игрок в списке
 } Player;
 
@@ -68,6 +69,7 @@ Player* add_player(Player *head, int sock, const char *name, int id) {
     p->name[sizeof(p->name)-1] = '\0';
     p->score = 0;
     p->answered = 0;
+    p->ready = 0;
     p->next = NULL;
 
     if (!head) return p;
@@ -294,135 +296,134 @@ void reset_round_flags(Player *head) {
 void process_round(Player *head, int q_index) {
     printf("\n📝 Вопрос %d/%d: %s\n", q_index + 1, question_count, questions[q_index].question);
     
-    // Сбрасываем флаги
     reset_round_flags(head);
-    
-    // Отправляем вопрос всем игрокам
     send_question(head, q_index);
-    
+
     time_t round_start = time(NULL);
-    time_t current_time;
-    int last_printed_sec = TIME_PER_QUESTION;
     int round_active = 1;
+    int last_printed_sec = TIME_PER_QUESTION;
     char buffer[256];
-    
-    // Главный цикл раунда с таймером
-    while (round_active == 1) {
+
+    while (round_active) {
         time_t now = time(NULL);
         int time_left = TIME_PER_QUESTION - (int)(now - round_start);
 
-        // Печать отсчета, если осталось меньше 10 секунд
         if (time_left <= 10 && time_left != last_printed_sec) {
             snprintf(buffer, sizeof(buffer), "%d seconds left...\n", time_left);
             printf("%s", buffer);
             send_to_all_except(head, buffer, -1);
             last_printed_sec = time_left;
         }
-    
+
+        // Считаем активных игроков
         int active_players = 0;
         Player *cur = head;
         while (cur) { if (!cur->answered) active_players++; cur = cur->next; }
 
-        if (active_players == 0) {
+        if (active_players == 0 || (int)(now - round_start) >= TIME_PER_QUESTION) {
             round_active = 0;
             break;
         }
 
         // Формируем массив pollfd
-        struct pollfd fds[active_players];
-        Player *players_list[active_players]; // чтобы потом сопоставлять с игроками
+        struct pollfd fds[active_players + 1];  // +1 для server_fd
+        Player *players_list[active_players];
         int idx = 0;
+
+        fds[idx].fd = server_fd;  // проверка новых подключений
+        fds[idx].events = POLLIN;
+        idx++;
+
         cur = head;
+        int pidx = 0;
         while (cur) {
             if (!cur->answered) {
                 fds[idx].fd = cur->sock;
                 fds[idx].events = POLLIN;
-                players_list[idx] = cur;
+                players_list[pidx++] = cur;
                 idx++;
             }
             cur = cur->next;
         }
 
-        int timeout_ms = 100; // проверка каждые 100 мс
-        int ready = poll(fds, active_players, timeout_ms);
+        int ready = poll(fds, idx, 100);
+        if (ready < 0 && errno != EINTR) { perror("poll"); continue; }
 
-
-        if (ready > 0) {
-            for (int i = 0; i < active_players; i++) {
-                cur = players_list[i];
-                if ((fds[i].revents & POLLIN) && !cur->answered) {
-                    char buf[10];
-                    int n = recv(cur->sock, buf, sizeof(buf)-1, 0);
-
-                    if (n > 0) {
-                        buf[n] = '\0';
-                        clean_string(buf);
-
-                        if (strcmp(buf, "0") == 0) {
-                            printf("🎮 %s не ответил вовремя (таймаут)\n", cur->name);
-                            cur->answered = 1;
-                            cur->answer = 0;
-                            cur->answer_time = TIME_PER_QUESTION;
-                        } else {
-                            int answer = atoi(buf);
-                            if (answer >= 1 && answer <= 4) {
-                                int time_spent = (int)(now - round_start);
-                                if (time_spent < 0) time_spent = 0;
-                                if (time_spent > TIME_PER_QUESTION) time_spent = TIME_PER_QUESTION;
-
-                                cur->answered = 1;
-                                cur->answer = answer;
-                                cur->answer_time = time_spent;
-
-                                int is_correct = (answer == questions[q_index].correct_option);
-                                int points = calculate_score(is_correct, time_spent);
-
-                                cur->score += points;
-
-                                char result_msg[256];
-                                if (is_correct)
-                                    snprintf(result_msg, sizeof(result_msg), "\n✅ Правильно! +%d очков\n", points);
-                                else
-                                    snprintf(result_msg, sizeof(result_msg),
-                                             "\n❌ Неправильно. Правильный ответ: %d) %s\n",
-                                             questions[q_index].correct_option,
-                                             questions[q_index].options[questions[q_index].correct_option - 1]);
-                                send(cur->sock, result_msg, strlen(result_msg), 0);
-
-                                printf("🎮 %s ответил за %d сек (%s, +%d очков)\n",
-                                       cur->name, time_spent,
-                                       is_correct ? "правильно" : "неправильно",
-                                       points);
-                            }
-                        }
-                    } else if (n == 0) {
-                        printf("❌ %s отключился\n", cur->name);
-                        head = remove_player(head, cur->sock);
-                    } else if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
-                        perror("recv");
-                    }
-                }
+        // --- Обработка новых подключений ---
+        if (fds[0].revents & POLLIN) {
+            struct sockaddr_in client_addr;
+            socklen_t client_len = sizeof(client_addr);
+            int new_sock = accept(server_fd, (struct sockaddr*)&client_addr, &client_len);
+            if (new_sock >= 0) {
+                fcntl(new_sock, F_SETFL, O_NONBLOCK);
+                char *msg = "⚠️ Игра уже идет. Попробуйте позже.\n";
+                send(new_sock, msg, strlen(msg), 0);
+                close(new_sock);
+                printf("Игрок попытался подключиться во время игры, соединение закрыто.\n");
+            } else if (errno != EAGAIN && errno != EWOULDBLOCK) {
+                perror("accept");
             }
         }
 
-        // Проверка таймера раунда
-        if ((int)(now - round_start) >= TIME_PER_QUESTION) {
-            printf("⏰ Время вышло!\n");
-            round_active = 0;
-            break;
-        }
+        // --- Обработка ответов игроков ---
+        for (int i = 0; i < active_players; i++) {
+            cur = players_list[i];
+            if ((fds[i + 1].revents & POLLIN) && !cur->answered) {  // fds[1..] — игроки
+                char buf[10];
+                int n = recv(cur->sock, buf, sizeof(buf)-1, 0);
 
-        // Проверка, все ли ответили
-        cur = head;
-        int all_answered = 1;
-        while (cur) { if (!cur->answered) { all_answered = 0; break; } cur = cur->next; }
-        if (all_answered) {
-            printf("✅ Все игроки ответили за %ld секунд\n", now - round_start);
-            round_active = 0;
-            break;
+                if (n > 0) {
+                    buf[n] = '\0';
+                    clean_string(buf);
+
+                    if (strcmp(buf, "0") == 0) {
+                        printf("🎮 %s не ответил вовремя (таймаут)\n", cur->name);
+                        cur->answered = 1;
+                        cur->answer = 0;
+                        cur->answer_time = TIME_PER_QUESTION;
+                    } else {
+                        int answer = atoi(buf);
+                        if (answer >= 1 && answer <= 4) {
+                            int time_spent = (int)(now - round_start);
+                            if (time_spent < 0) time_spent = 0;
+                            if (time_spent > TIME_PER_QUESTION) time_spent = TIME_PER_QUESTION;
+
+                            cur->answered = 1;
+                            cur->answer = answer;
+                            cur->answer_time = time_spent;
+
+                            int is_correct = (answer == questions[q_index].correct_option);
+                            int points = calculate_score(is_correct, time_spent);
+
+                            cur->score += points;
+
+                            char result_msg[256];
+                            if (is_correct)
+                                snprintf(result_msg, sizeof(result_msg), "\n✅ Правильно! +%d очков\n", points);
+                            else
+                                snprintf(result_msg, sizeof(result_msg),
+                                         "\n❌ Неправильно. Правильный ответ: %d) %s\n",
+                                         questions[q_index].correct_option,
+                                         questions[q_index].options[questions[q_index].correct_option - 1]);
+                            send(cur->sock, result_msg, strlen(result_msg), 0);
+
+                            printf("🎮 %s ответил за %d сек (%s, +%d очков)\n",
+                                   cur->name, time_spent,
+                                   is_correct ? "правильно" : "неправильно",
+                                   points);
+                        }
+                    }
+                } else if (n == 0) {  // Игрок отключился
+                    printf("❌ %s отключился\n", cur->name);
+                    head = remove_player(head, cur->sock);
+                } else if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+                    perror("recv");
+                }
+            }
         }
     }
-    // Отправляем сообщение об окончании времени тем, кто не ответил
+
+    // --- Обработка игроков, не ответивших ---
     Player *cur = head;
     while (cur) {
         if (!cur->answered) {
@@ -435,14 +436,13 @@ void process_round(Player *head, int q_index) {
                     questions[q_index].options[questions[q_index].correct_option - 1]);
 
             send(cur->sock, timeout_msg, strlen(timeout_msg), 0);
-
         }
         cur = cur->next;
     }
-    
-    // Небольшая пауза, чтобы игроки успели прочитать сообщение
-    usleep(1000000); // 1 секунда
+
+    usleep(1000000); // 1 секунда перед следующим вопросом
 }
+
 
 Player* sort_players_by_score(Player *head, int *out_count) {
     // Считаем количество игроков
@@ -614,16 +614,12 @@ void send_final_results(Player *head) {
 }
 
 
-
-
-
 int main() {
     if (!load_questions(QUESTIONS_FILE)) {
         printf("Используем вопросы по умолчанию...\n");
     }
 
     struct sockaddr_in server_addr;
-    
 
     // Создаем серверный сокет
     server_fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -631,13 +627,14 @@ int main() {
 
     signal(SIGINT, handle_sigint);
 
-
     int opt = 1;
     setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
     server_addr.sin_family = AF_INET;
     server_addr.sin_addr.s_addr = INADDR_ANY;
     server_addr.sin_port = htons(PORT);
+
+    fcntl(server_fd, F_SETFL, O_NONBLOCK);
 
     if (bind(server_fd, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
         perror("bind"); exit(1);
@@ -649,123 +646,156 @@ int main() {
 
     printf("Сервер запущен на порту %d\n", PORT);
     print_local_ip();
-    printf("Сервер ждет игроков %d секунд...\n", CONNECT_TIMEOUT);
-
-    int next_id = 1;
-
-    struct pollfd fds[MAX_PLAYERS + 1];
-    fds[0].fd = server_fd;
-    fds[0].events = POLLIN;
-
-    time_t start_time = time(NULL);
-    int player_count = 0;
-    int last_second_printed = -1;
-
-    char msg[256];
 
     PendingPlayer pending[MAX_PLAYERS];
     int pending_count = 0;
 
-    while ((time(NULL) - start_time) < CONNECT_TIMEOUT && (player_count + pending_count) < MAX_PLAYERS) {
-        int time_left = CONNECT_TIMEOUT - (int)(time(NULL) - start_time);
+    Player *head = NULL;
+    int next_id = 1;
 
-        if (time_left != last_second_printed && time_left <= 15) {
-            printf("⏳ Осталось %d секунд для подключения игроков...\n", time_left);
-            snprintf(msg, sizeof(msg), "⏳ Осталось %d секунд для подключения игроков...\n", time_left);
-            send_to_all_except(head, msg, -1);
-            send_to_pending(pending, pending_count, msg);
-            last_second_printed = time_left;
+    printf("Ожидаем игроков в лобби...\n");
+
+    // --- Lobby: игроки подключаются и подтверждают READY ---
+    while (1) {
+        int count = 0;
+        Player *cur = head;
+        while (cur) { count++; cur = cur->next; }
+
+        int nfds = 1 + pending_count + count;
+        struct pollfd fds[nfds];
+        int idx = 0;
+
+        // server_fd для новых подключений
+        fds[idx].fd = server_fd;
+        fds[idx].events = POLLIN;
+        idx++;
+
+        // pending
+        for (int i = 0; i < pending_count; i++, idx++) {
+            fds[idx].fd = pending[i].sock;
+            fds[idx].events = POLLIN;
         }
 
-        int nfds = 1 + pending_count;
-        for (int i = 0; i < pending_count; i++) {
-            fds[i+1].fd = pending[i].sock;
-            fds[i+1].events = POLLIN;
+        // все игроки
+        cur = head;
+        Player *players[count];
+        int pidx = 0;
+        while (cur) {
+            fds[idx].fd = cur->sock;
+            fds[idx].events = POLLIN;
+            players[pidx++] = cur;
+            cur = cur->next;
+            idx++;
         }
 
-        int ready = poll(fds, nfds, 100); // проверяем каждые 100 мс
-        if (ready > 0) {
-            // Новый клиент
-            if (fds[0].revents & POLLIN && (player_count + pending_count) < MAX_PLAYERS) {
-                struct sockaddr_in client_addr;
-                socklen_t client_len = sizeof(client_addr);
-                int client_sock = accept(server_fd, (struct sockaddr*)&client_addr, &client_len);
-                if (client_sock >= 0) {
-                    fcntl(client_sock, F_SETFL, O_NONBLOCK); // неблокирующий режим
-                    pending[pending_count].sock = client_sock;
-                    pending[pending_count].bytes_received = 0;
-                    pending_count++;
-                }
-            }
+        int ready_count = poll(fds, nfds, 100);
+        if (ready_count < 0 && errno != EINTR) { perror("poll"); continue; }
 
-            // Чтение имён у ожидающих игроков
-            for (int i = 0; i < pending_count; i++) {
-                char buf[MAX_NAME_LEN];
-                int n = recv(pending[i].sock, buf, sizeof(buf)-1, 0);
-                if (n > 0) {
-                    buf[n] = '\0';
-                    clean_string(buf);
-                    strncpy(pending[i].name, buf, MAX_NAME_LEN-1);
-                    pending[i].name[MAX_NAME_LEN-1] = '\0';
-
-                    // Проверка дубликатов
-                    int suffix = 1;
-                    char original[MAX_NAME_LEN];
-                    strncpy(original, pending[i].name, MAX_NAME_LEN-1);
-                    original[MAX_NAME_LEN-1] = '\0';
-                    while (name_exists(head, pending[i].name)) {
-                        snprintf(pending[i].name, MAX_NAME_LEN, "%s_%d", original, suffix++);
-                    }
-
-                    // Добавляем игрока в список
-                    head = add_player(head, pending[i].sock, pending[i].name, player_count + 1);
-                    player_count++;
-
-                    snprintf(msg, sizeof(msg), "Привет, %s! Вы присоединились к игре.\n", pending[i].name);
-                    send(pending[i].sock, msg, strlen(msg), 0);
-                    snprintf(msg, sizeof(msg), "%s подключился (%d/%d)\n", pending[i].name, player_count, MAX_PLAYERS);
-                    printf("%s подключился (%d/%d)\n", pending[i].name, player_count, MAX_PLAYERS);
-                    send_to_all_except(head, msg, next_id-1);
-
-                    // Убираем из массива pending
-                    for (int j = i; j < pending_count - 1; j++) pending[j] = pending[j+1];
-                    pending_count--;
-                    i--; // смещаем индекс
-                }
+        // Новый клиент
+        if (fds[0].revents & POLLIN && (count + pending_count) < MAX_PLAYERS) {
+            struct sockaddr_in client_addr;
+            socklen_t client_len = sizeof(client_addr);
+            int client_sock = accept(server_fd, (struct sockaddr*)&client_addr, &client_len);
+            if (client_sock >= 0) {
+                fcntl(client_sock, F_SETFL, O_NONBLOCK);
+                pending[pending_count].sock = client_sock;
+                pending[pending_count].bytes_received = 0;
+                pending[pending_count].name[0] = '\0';
+                pending_count++;
+                printf("Новый игрок подключился (сокет %d), ожидаем имя...\n", client_sock);
             }
         }
 
-        // Проверка таймера подключения для игроков без имени
+        // Получение имени у pending
         for (int i = 0; i < pending_count; i++) {
-            if ((time(NULL) - start_time) >= CONNECT_TIMEOUT) {
-                printf("❌ Игрок на сокете %d не успел ввести имя, соединение закрыто\n", pending[i].sock);
-                close(pending[i].sock);
+            char buf[MAX_NAME_LEN];
+            int n = recv(pending[i].sock, buf, sizeof(buf) - 1, 0);
+            if (n > 0) {
+                buf[n] = '\0';
+                clean_string(buf);
+                strncpy(pending[i].name, buf, MAX_NAME_LEN-1);
+                pending[i].name[MAX_NAME_LEN-1] = '\0';
 
-                // Убираем из массива
+                int suffix = 1;
+                char original[MAX_NAME_LEN];
+                strncpy(original, pending[i].name, MAX_NAME_LEN);
+                while (name_exists(head, pending[i].name)) {
+                    snprintf(pending[i].name, MAX_NAME_LEN, "%s_%d", original, suffix++);
+                }
+
+                head = add_player(head, pending[i].sock, pending[i].name, next_id++);
+                printf("Игрок '%s' добавлен в игру!\n", pending[i].name);
+
+                // Убираем из pending
                 for (int j = i; j < pending_count - 1; j++) pending[j] = pending[j+1];
                 pending_count--;
                 i--;
+            } else if (n == 0) {
+                close(pending[i].sock);
+                for (int j = i; j < pending_count - 1; j++) pending[j] = pending[j+1];
+                pending_count--;
+                i--;
+            } else if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+                perror("recv");
             }
         }
+
+        // Проверка READY от игроков
+        for (int i = 0; i < count; i++) {
+            if (fds[1 + pending_count + i].revents & POLLIN) {
+                char msg[64];
+                int n = recv(fds[1 + pending_count + i].fd, msg, sizeof(msg)-1, 0);
+                if (n <= 0) continue;
+                msg[n] = '\0';
+                clean_string(msg);
+                if (strcmp(msg, "READY") == 0 && !players[i]->ready) {
+                    players[i]->ready = 1;
+                    char buffer[256];
+                    snprintf(buffer, sizeof(buffer), "✅ %s is ready\n", players[i]->name);
+                    send_to_all_except(head, buffer, -1);
+                }
+            }
+        }
+
+        // Проверка, готовы ли все игроки
+        int all_ready = 1;
+        int total_players = 0;
+        cur = head;
+        while (cur) {
+            total_players++;
+            if (!cur->ready) all_ready = 0;
+            cur = cur->next;
+        }
+
+        if (total_players > 0 && all_ready) {
+            send_to_all_except(head, "\n✅ All players are ready! Game starting...\n", -1);
+            break;
+        }
     }
+    // Перед стартом удаляем всех pending
+    for (int i = 0; i < pending_count; i++) { 
+    close(pending[i].sock);
+    }
+    printf("Старт игры!\n");
 
-    printf("Время ожидания истекло. Игроков подключено: %d\n", player_count);
-    send_to_all_except(head, "Все игроки подключены! Игра начинается!\n", -1);
-
-    // Викторина
+    // --- Викторина ---
     for (int q = 0; q < question_count; q++) {
+
+        struct sockaddr_in client_addr;
+        socklen_t client_len = sizeof(client_addr);
+
+
+
         process_round(head, q);
         send_results(head, q);
     }
 
-    // Финальные результаты
     send_final_results(head);
 
-    // Закрываем соединения
     free_players(head);
+    free(questions);
     close(server_fd);
 
     printf("Игра окончена!\n");
     return 0;
 }
-
