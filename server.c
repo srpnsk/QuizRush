@@ -100,7 +100,7 @@ Player* remove_player(Player *head, int sock) {
 }
 
 void handle_sigint(int sig) {
-    printf("\n⚠️  Сервером получен SIGINT, закрываем соединения...\n");
+    printf("\nСервером получен SIGINT, закрываем соединения...\n");
 
     // Отправляем сообщение всем игрокам
     if (head) {
@@ -145,7 +145,7 @@ void free_players(Player *head) {
     }
 }
 
-
+/*
 void print_local_ip() {
     struct ifaddrs *ifaddr, *ifa;
     if (getifaddrs(&ifaddr) == -1) {
@@ -165,6 +165,7 @@ void print_local_ip() {
     }
     freeifaddrs(ifaddr);
 }
+*/
 
 int load_questions(const char* filename) {
     FILE* file = fopen(filename, "r");
@@ -208,7 +209,7 @@ int load_questions(const char* filename) {
     }
     
     fclose(file);
-    printf("Загружено %d вопросов\n", question_count);
+    printf("Загружено вопросов: %d\n", question_count);
     return 1;
 }
 
@@ -252,7 +253,7 @@ void send_question(Player* head, int q_index) {
     Question q = questions[q_index];
     
     snprintf(buffer, sizeof(buffer),
-             "\n════════════════════════════════════════\n"
+             "\n=================================================\n"
              "Вопрос %d/%d:\n"
              "%s\n\n"
              "Варианты ответов:\n"
@@ -294,7 +295,7 @@ void reset_round_flags(Player *head) {
 
 // Обработка раунда с таймером
 void process_round(Player *head, int q_index) {
-    printf("\n📝 Вопрос %d/%d: %s\n", q_index + 1, question_count, questions[q_index].question);
+    printf("\nВопрос %d/%d: %s\n", q_index + 1, question_count, questions[q_index].question);
     
     reset_round_flags(head);
     send_question(head, q_index);
@@ -309,7 +310,7 @@ void process_round(Player *head, int q_index) {
         int time_left = TIME_PER_QUESTION - (int)(now - round_start);
 
         if (time_left <= 10 && time_left != last_printed_sec) {
-            snprintf(buffer, sizeof(buffer), "%d seconds left...\n", time_left);
+            snprintf(buffer, sizeof(buffer), "До окончания раунда: %d...\n", time_left);
             printf("%s", buffer);
             send_to_all_except(head, buffer, -1);
             last_printed_sec = time_left;
@@ -356,7 +357,7 @@ void process_round(Player *head, int q_index) {
             int new_sock = accept(server_fd, (struct sockaddr*)&client_addr, &client_len);
             if (new_sock >= 0) {
                 fcntl(new_sock, F_SETFL, O_NONBLOCK);
-                char *msg = "⚠️ Игра уже идет. Попробуйте позже.\n";
+                char *msg = "Игра уже идет! Попробуйте позже.\n";
                 send(new_sock, msg, strlen(msg), 0);
                 close(new_sock);
                 printf("Игрок попытался подключиться во время игры, соединение закрыто.\n");
@@ -377,7 +378,7 @@ void process_round(Player *head, int q_index) {
                     clean_string(buf);
 
                     if (strcmp(buf, "0") == 0) {
-                        printf("🎮 %s не ответил вовремя (таймаут)\n", cur->name);
+                        printf("[%s] не ответил вовремя\n", cur->name);
                         cur->answered = 1;
                         cur->answer = 0;
                         cur->answer_time = TIME_PER_QUESTION;
@@ -399,22 +400,22 @@ void process_round(Player *head, int q_index) {
 
                             char result_msg[256];
                             if (is_correct)
-                                snprintf(result_msg, sizeof(result_msg), "\n✅ Правильно! +%d очков\n", points);
+                                snprintf(result_msg, sizeof(result_msg), "\nПравильно! +%d\n", points);
                             else
                                 snprintf(result_msg, sizeof(result_msg),
-                                         "\n❌ Неправильно. Правильный ответ: %d) %s\n",
+                                         "\nНеправильно. Правильный ответ: %d) %s\n",
                                          questions[q_index].correct_option,
                                          questions[q_index].options[questions[q_index].correct_option - 1]);
                             send(cur->sock, result_msg, strlen(result_msg), 0);
 
-                            printf("🎮 %s ответил за %d сек (%s, +%d очков)\n",
+                            printf("[%s] ответил за %d сек (%s, +%d)\n",
                                    cur->name, time_spent,
                                    is_correct ? "правильно" : "неправильно",
                                    points);
                         }
                     }
                 } else if (n == 0) {  // Игрок отключился
-                    printf("❌ %s отключился\n", cur->name);
+                    printf("[%s] отключился\n", cur->name);
                     head = remove_player(head, cur->sock);
                 } else if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
                     perror("recv");
@@ -429,9 +430,8 @@ void process_round(Player *head, int q_index) {
         if (!cur->answered) {
             char timeout_msg[512];
             snprintf(timeout_msg, sizeof(timeout_msg),
-                    "\n⏰ Время вышло! Вы не успели ответить.\n"
-                    "Правильный ответ: %d) %s\n\n"
-                    "Переходим к следующему вопросу...\n",
+                    "\nВремя вышло! Вы не успели ответить.\n"
+                    "Правильный ответ: %d) %s\n\n",
                     questions[q_index].correct_option,
                     questions[q_index].options[questions[q_index].correct_option - 1]);
 
@@ -439,8 +439,9 @@ void process_round(Player *head, int q_index) {
         }
         cur = cur->next;
     }
-
-    usleep(1000000); // 1 секунда перед следующим вопросом
+    char msg[256];
+    snprintf(msg, sizeof(msg), "Все игроки ответили. Переходим к следующему вопросу...\n");
+    send_to_all_except(head, msg, -1);
 }
 
 
@@ -491,7 +492,7 @@ void send_results(Player *head, int q_index) {
     // Формируем таблицу результатов
     snprintf(buffer, sizeof(buffer),
              "\n════════════════════════════════════════\n"
-             "📊 РЕЗУЛЬТАТЫ ПОСЛЕ ВОПРОСА %d/%d\n"
+             " РЕЗУЛЬТАТЫ ПОСЛЕ ВОПРОСА %d/%d\n"
              "════════════════════════════════════════\n"
              "┌──────────────────┬────────────┐\n"
              "│ Игрок            │ Очки       │\n"
@@ -542,68 +543,61 @@ void send_final_results(Player *head) {
     char buffer[8192];
     snprintf(buffer, sizeof(buffer),
              "\n══════════════════════════════════════════════════════════\n"
-             "                      🎉 ИГРА ОКОНЧЕНА! 🎉\n"
+             "                        ИГРА ОКОНЧЕНА! \n"
              "══════════════════════════════════════════════════════════\n\n");
 
     // Добавляем поздравление победителю/победителям
     if (winner_count == 1) {
         char congrats[256];
         snprintf(congrats, sizeof(congrats),
-                 "              🏆 ПОБЕДИТЕЛЬ: %-16s 🏆\n"
-                 "              🏆 %d очков\n\n",
+                 "                ПОБЕДИТЕЛЬ: %-16s \n"
+                 "                %d \n\n",
                  sorted_players[0].name, max_score);
         strcat(buffer, congrats);
     } else if (winner_count > 1) {
         char congrats[512];
         snprintf(congrats, sizeof(congrats),
-                 "              🏆 ПОБЕДИТЕЛИ: \n");
+                 "                ПОБЕДИТЕЛИ: \n");
         strcat(buffer, congrats);
 
         for (int i = 0; i < winner_count; i++) {
             char line[128];
-            snprintf(line, sizeof(line), "              🏆 %-16s 🏆\n", sorted_players[i].name);
+            snprintf(line, sizeof(line), "                %-16s  \n", sorted_players[i].name);
             strcat(buffer, line);
         }
         char score_line[128];
-        snprintf(score_line, sizeof(score_line), "              %d очков\n\n", max_score);
+        snprintf(score_line, sizeof(score_line), "              %d \n\n", max_score);
         strcat(buffer, score_line);
     }
 
     // Добавляем итоговую таблицу
     strcat(buffer, "📈 ИТОГОВАЯ ТАБЛИЦА РЕЗУЛЬТАТОВ:\n"
-                   "┌───────┬──────────────────┬────────────┬──────────────┐\n"
-                   "│ Место │ Игрок            │ Очки       │ Рейтинг      │\n"
-                   "├───────┼──────────────────┼────────────┼──────────────┤\n");
+                   "┌───────┬──────────────────┬────────────┐\n"
+                   "│ Место │ Игрок            │ Очки       │\n"
+                   "├───────┼──────────────────┼────────────│\n");
 
     for (int i = 0; i < count; i++) {
-        char rating[20];
-        if (i == 0 && sorted_players[i].score > 0) strcpy(rating, "⭐⭐⭐⭐⭐");
-        else if (i == 1 && sorted_players[i].score > 0) strcpy(rating, "⭐⭐⭐⭐");
-        else if (i == 2 && sorted_players[i].score > 0) strcpy(rating, "⭐⭐⭐");
-        else if (sorted_players[i].score > 0) strcpy(rating, "⭐⭐");
-        else strcpy(rating, "⭐");
-
         char line[128];
-        snprintf(line, sizeof(line), "│ %-5d │ %-16s │ %-10d │ %-8s │\n",
-                 i + 1, sorted_players[i].name, sorted_players[i].score, rating);
+        snprintf(line, sizeof(line), "│ %-5d │ %-16s │ %-10d │\n",
+                 i + 1, sorted_players[i].name, sorted_players[i].score);
         strcat(buffer, line);
     }
 
-    strcat(buffer, "└───────┴──────────────────┴────────────┴──────────────┘\n\n");
+    strcat(buffer, "└───────┴──────────────────┴────────────┘\n\n");
 
     // Статистика
     char stats[256];
     snprintf(stats, sizeof(stats),
-             "📊 СТАТИСТИКА ИГРЫ:\n"
+             "  СТАТИСТИКА ИГРЫ:\n"
              "   Всего вопросов: %d\n"
              "   Всего игроков: %d\n"
-             "   Максимальный счет: %d очков\n\n",
+             "   Максимальный счет: %d \n\n",
              question_count, count, max_score);
     strcat(buffer, stats);
 
     strcat(buffer,
            "══════════════════════════════════════════════════════════\n"
-           "  Спасибо за участие в QuizRush! Ждем вас снова! 🎮\n"
+           "  Спасибо за участие в QuizRush! Ждем вас снова! \n"
            "══════════════════════════════════════════════════════════\n");
 
     // Отправляем всем игрокам
@@ -616,7 +610,7 @@ void send_final_results(Player *head) {
 
 int main() {
     if (!load_questions(QUESTIONS_FILE)) {
-        printf("Используем вопросы по умолчанию...\n");
+        printf("Вопросы не найдены. Убедитесь, что импортировали в папку файл 'questions.txt'\n");
     }
 
     struct sockaddr_in server_addr;
@@ -645,7 +639,7 @@ int main() {
     }
 
     printf("Сервер запущен на порту %d\n", PORT);
-    print_local_ip();
+    //print_local_ip();
 
     PendingPlayer pending[MAX_PLAYERS];
     int pending_count = 0;
@@ -724,8 +718,20 @@ int main() {
                 }
 
                 head = add_player(head, pending[i].sock, pending[i].name, next_id++);
-                printf("Игрок '%s' добавлен в игру!\n", pending[i].name);
-
+                printf("Игрок [%s] добавлен в игру!\n", pending[i].name);
+                int ready = 0;
+                int total_players = 0;
+                cur = head;
+                while (cur) {
+                    total_players++;
+                    if (cur->ready) ready++;
+                    cur = cur->next;
+                }
+                char msg[256];
+                snprintf(msg, sizeof(msg), "[%s] присоединился! Готовых игроков на данный момент: (%d/%d)\n", pending[i].name, ready, total_players);
+                send_to_all_except(head, msg, -1);
+                snprintf(msg, sizeof(msg), "Для подтверждения готовности введите комманду '/ready'\n");
+                send(pending[i].sock, msg, strlen(msg), 0);
                 // Убираем из pending
                 for (int j = i; j < pending_count - 1; j++) pending[j] = pending[j+1];
                 pending_count--;
@@ -748,10 +754,18 @@ int main() {
                 if (n <= 0) continue;
                 msg[n] = '\0';
                 clean_string(msg);
-                if (strcmp(msg, "READY") == 0 && !players[i]->ready) {
+                if (strcmp(msg, "/ready") == 0 && !players[i]->ready) {
                     players[i]->ready = 1;
                     char buffer[256];
-                    snprintf(buffer, sizeof(buffer), "✅ %s is ready\n", players[i]->name);
+                    int ready = 0;
+                    int total_players = 0;
+                    cur = head;
+                    while (cur) {
+                        total_players++;
+                        if (cur->ready) ready++;
+                        cur = cur->next;
+                    }
+                    snprintf(buffer, sizeof(buffer), "[%s] готов. Готовые игроки: (%d/%d)\n", players[i]->name, ready, total_players);
                     send_to_all_except(head, buffer, -1);
                 }
             }
@@ -768,7 +782,8 @@ int main() {
         }
 
         if (total_players > 0 && all_ready) {
-            send_to_all_except(head, "\n✅ All players are ready! Game starting...\n", -1);
+            send_to_all_except(head, "\nВсе игроки готовы! Игра начинается...\n", -1);
+            sleep(3);
             break;
         }
     }
@@ -788,6 +803,7 @@ int main() {
 
         process_round(head, q);
         send_results(head, q);
+        sleep(2);
     }
 
     send_final_results(head);
