@@ -102,7 +102,7 @@ Player* remove_player(Player *head, int sock) {
 }
 
 void handle_sigint(int sig) {
-    printf("\nСервером получен SIGINT, закрываем соединения...\n");
+    printf("\nСервером получен сигнал для завершения, закрываем соединения...\n");
 
     // Отправляем сообщение всем игрокам
     if (head) {
@@ -606,7 +606,7 @@ void send_final_results(Player *head) {
         char congrats[256];
         snprintf(congrats, sizeof(congrats),
                  "                ПОБЕДИТЕЛЬ: %-16s \n"
-                 "                %d \n\n",
+                 "                   Счёт:%d \n\n",
                  sorted_players[0].name, max_score);
         strcat(buffer, congrats);
     } else if (winner_count > 1) {
@@ -793,7 +793,6 @@ int main() {
                 pending_count--;
                 i--;
             } else if (n == 0) {
-                printf("Игрок на сокете %d вышел до /ready\n", pending[i].sock);
                 close(pending[i].sock);
                 for (int j = i; j < pending_count - 1; j++) pending[j] = pending[j+1];
                 pending_count--;
@@ -814,12 +813,14 @@ int main() {
                     players[i]->connected = 0;
                 }
                 else if (n == 0) {
-                    printf("Игрок [%s] отключился до /ready\n", players[i]->name);
+                    printf("Игрок [%s] отключился\n", players[i]->name);
                     // закрываем сокет и убираем из списка
                     char s_name[MAX_NAME_LEN];
                     snprintf(s_name, sizeof(s_name), "%s", players[i]->name);
-                    close(players[i]->sock);
                     head = remove_player(head, players[i]->sock);
+                    if (!head) {
+                        handle_sigint(0);
+                    }
                     char buffer[256];
                         int ready = 0;
                         int total_players = 0;
@@ -886,9 +887,12 @@ int main() {
         process_round(head, q);
         notify_about_disconnected(head);
         head = cleanup_disconnected(head);
+        if (!head) handle_sigint(0);
+
         send_results(head, q);
         notify_about_disconnected(head);
         head = cleanup_disconnected(head);
+        if (!head) handle_sigint(0);
         sleep(2);
     }
 
