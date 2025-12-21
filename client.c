@@ -17,35 +17,37 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    char *host = argv[1];
-    int sock;
-    struct sockaddr_in server_addr;
     char name[MAX_NAME_LEN];
     char buffer[BUFFER_SIZE];
 
-    // Создаем сокет
-    sock = socket(AF_INET, SOCK_STREAM, 0);
-    if (sock < 0) { perror("socket"); exit(1); }
-
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(SERVER_PORT);
-
-    // Пробуем распознать как IP
-    if (inet_pton(AF_INET, host, &server_addr.sin_addr) <= 0) {
-        // Если не IP, пытаемся как hostname
-        struct hostent *he = gethostbyname(host);
-        if (!he) {
-            fprintf(stderr, "Неизвестный хост: %s\n", host);
-            exit(1);
-        }
-        memcpy(&server_addr.sin_addr, he->h_addr_list[0], he->h_length);
+    struct addrinfo hints, *res, *rp;
+    memset(&hints, 0, sizeof(hints));
+    int sock = -1;
+    char port_str[16];
+    snprintf(port_str, sizeof(port_str), "%d", SERVER_PORT);
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    int err = getaddrinfo(argv[1], port_str, &hints, &res);
+    if (err != 0) {
+        fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(err));
+        return -1;
     }
 
-    // Подключаемся к серверу
-    if (connect(sock, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
+    for (rp = res; rp != NULL; rp = rp->ai_next) {
+        sock = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
+        if (sock == -1)
+        continue;
+        if (connect(sock, rp->ai_addr, rp->ai_addrlen) == 0)
+        break;
+        close(sock);
+        sock = -1;
+    }
+    freeaddrinfo(res);
+    if (sock == -1) {
         perror("connect");
-        exit(1);
+        return -1;
     }
+
 
     printf("Введите ваше имя: ");
     fgets(name, sizeof(name), stdin);
