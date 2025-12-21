@@ -793,6 +793,7 @@ int main() {
                 pending_count--;
                 i--;
             } else if (n == 0) {
+                printf("Игрок на сокете %d вышел до /ready\n", pending[i].sock);
                 close(pending[i].sock);
                 for (int j = i; j < pending_count - 1; j++) pending[j] = pending[j+1];
                 pending_count--;
@@ -807,22 +808,47 @@ int main() {
             if (fds[1 + pending_count + i].revents & POLLIN) {
                 char msg[64];
                 int n = recv(fds[1 + pending_count + i].fd, msg, sizeof(msg)-1, 0);
-                if (n <= 0) continue;
-                msg[n] = '\0';
-                clean_string(msg);
-                if (strcmp(msg, "/ready") == 0 && !players[i]->ready) {
-                    players[i]->ready = 1;
+                if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+                    perror("recv");
+                    close(players[i]->sock);
+                    players[i]->connected = 0;
+                }
+                else if (n == 0) {
+                    printf("Игрок [%s] отключился до /ready\n", players[i]->name);
+                    // закрываем сокет и убираем из списка
+                    char s_name[MAX_NAME_LEN];
+                    snprintf(s_name, sizeof(s_name), "%s", players[i]->name);
+                    close(players[i]->sock);
+                    head = remove_player(head, players[i]->sock);
                     char buffer[256];
-                    int ready = 0;
-                    int total_players = 0;
-                    cur = head;
-                    while (cur) {
-                        total_players++;
-                        if (cur->ready) ready++;
-                        cur = cur->next;
+                        int ready = 0;
+                        int total_players = 0;
+                        cur = head;
+                        while (cur) {
+                            total_players++;
+                            if (cur->ready) ready++;
+                            cur = cur->next;
+                        }
+                        snprintf(buffer, sizeof(buffer), "Игрок [%s] вышел из лобби. Готовые игроки: (%d/%d)\n", s_name, ready, total_players);
+                        send_to_all_except(head, buffer, -1);
+                }
+                else if (n > 0){
+                    msg[n] = '\0';
+                    clean_string(msg);
+                    if (strcmp(msg, "/ready") == 0 && !players[i]->ready) {
+                        players[i]->ready = 1;
+                        char buffer[256];
+                        int ready = 0;
+                        int total_players = 0;
+                        cur = head;
+                        while (cur) {
+                            total_players++;
+                            if (cur->ready) ready++;
+                            cur = cur->next;
+                        }
+                        snprintf(buffer, sizeof(buffer), "[%s] готов. Готовые игроки: (%d/%d)\n", players[i]->name, ready, total_players);
+                        send_to_all_except(head, buffer, -1);
                     }
-                    snprintf(buffer, sizeof(buffer), "[%s] готов. Готовые игроки: (%d/%d)\n", players[i]->name, ready, total_players);
-                    send_to_all_except(head, buffer, -1);
                 }
             }
         }
