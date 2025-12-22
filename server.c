@@ -88,7 +88,7 @@ Player* remove_player(Player *head, int sock) {
     while (cur) {
         if (cur->sock == sock) {
             if (prev) prev->next = cur->next;
-            else head = cur->next;  // удаляем голову списка
+            else head = cur->next; 
 
             close(cur->sock);
             free(cur);
@@ -97,7 +97,7 @@ Player* remove_player(Player *head, int sock) {
         prev = cur;
         cur = cur->next;
     }
-    return head;  // если не нашли игрока, возвращаем список без изменений
+    return head;
 }
 
 void handle_sigint() {
@@ -270,11 +270,11 @@ int name_exists(Player *head, const char *name) {
     Player *cur = head;
     while (cur) {
         if (strcmp(cur->name, name) == 0) {
-            return 1; // имя найдено
+            return 1;
         }
         cur = cur->next;
     }
-    return 0; // имя не найдено
+    return 0;
 }
 
 // Подсчет очков с учетом скорости
@@ -315,12 +315,12 @@ void send_question(Player* head, int q_index) {
 int all_players_answered(Player *head) {
     Player *cur = head;
     while (cur) {
-        if (cur->connected && !cur->answered) {  // если игрок не ответил
+        if (cur->connected && !cur->answered) {
             return 0;
         }
         cur = cur->next;
     }
-    return 1; // все игроки ответили
+    return 1;
 }
 
 // Сброс флагов ответов для нового раунда
@@ -372,7 +372,7 @@ void process_round(Player *head, int q_index) {
         Player *players_list[active_players];
         int idx = 0;
 
-        fds[idx].fd = server_fd;  // проверка новых подключений
+        fds[idx].fd = server_fd;
         fds[idx].events = POLLIN;
         idx++;
 
@@ -391,7 +391,7 @@ void process_round(Player *head, int q_index) {
         int ready = poll(fds, idx, 100);
         if (ready < 0 && errno != EINTR) { perror("poll"); continue; }
 
-        // --- Обработка новых подключений ---
+        // Обработка новых подключений
         if (fds[0].revents & POLLIN) {
             struct sockaddr_in client_addr;
             socklen_t client_len = sizeof(client_addr);
@@ -407,7 +407,7 @@ void process_round(Player *head, int q_index) {
             }
         }
 
-        // --- Обработка ответов игроков ---
+        // Обработка ответов игроков
         for (int i = 0; i < active_players; i++) {
             cur = players_list[i];
             if ((fds[i + 1].revents & POLLIN) && !cur->answered) {  // fds[1..] — игроки
@@ -470,7 +470,7 @@ void process_round(Player *head, int q_index) {
         }
     }
 
-    // --- Обработка игроков, не ответивших ---
+    // Обработка не ответивших игроков
     Player *cur = head;
     while (cur) {
         if (!cur->answered) {
@@ -517,7 +517,7 @@ Player* sort_players_by_score(Player *head, int *out_count) {
         cur = cur->next;
     }
 
-    // Сортировка пузырьком по score (убывание)
+    // Сортировка пузырьком по score
     for (int i = 0; i < count - 1; i++) {
         for (int j = i + 1; j < count; j++) {
             if (arr[j].score > arr[i].score) {
@@ -531,7 +531,7 @@ Player* sort_players_by_score(Player *head, int *out_count) {
     return arr;
 }
 
-// Отправка результатов игрокам (без времени)
+// Отправка результатов игрокам
 void send_results(Player *head, int q_index) {
     char buffer[2048];
 
@@ -704,7 +704,7 @@ int main() {
 
     printf("Ожидаем игроков в лобби...\n");
 
-    // --- Lobby: игроки подключаются и подтверждают READY ---
+    // Lobby: игроки подключаются и подтверждают /ready
     while (1) {
         int count = 0;
         Player *cur = head;
@@ -800,7 +800,7 @@ int main() {
             }
         }
 
-        // Проверка READY от игроков
+        // Проверка /ready от игроков
         for (int i = 0; i < count; i++) {
             if (fds[1 + pending_count + i].revents & POLLIN) {
                 char msg[64];
@@ -874,7 +874,7 @@ int main() {
     }
     printf("Старт игры!\n");
 
-    // --- Викторина ---
+    // Викторина
     for (int q = 0; q < question_count; q++) {
 
 
