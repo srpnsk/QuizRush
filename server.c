@@ -100,7 +100,7 @@ Player* remove_player(Player *head, int sock) {
     return head;  // если не нашли игрока, возвращаем список без изменений
 }
 
-void handle_sigint(int sig) {
+void handle_sigint() {
     printf("\nСервером получен сигнал для завершения, закрываем соединения...\n");
 
     // Отправляем сообщение всем игрокам
@@ -482,7 +482,7 @@ void process_round(Player *head, int q_index) {
                     questions[q_index].options[questions[q_index].correct_option - 1]);
             ssize_t s = send(cur->sock, timeout_msg, strlen(timeout_msg), 0);
             if (s <= 0) {
-                printf("[%s] отключился между раундами\n", cur->name);
+                printf("[%s] отключился\n", cur->name);
                 cur->connected = 0;
             }
             
@@ -564,7 +564,7 @@ void send_results(Player *head, int q_index) {
     while (cur) {
         ssize_t s = send(cur->sock, buffer, strlen(buffer), 0);
         if (s <= 0) {
-            printf("[%s] отключился между раундами\n", cur->name);
+            printf("[%s] отключился\n", cur->name);
             cur->connected = 0;
         }
         cur = cur->next;
@@ -664,7 +664,7 @@ void send_final_results(Player *head) {
 
 int main() {
     if (!load_questions(QUESTIONS_FILE)) {
-        printf("Вопросы не найдены. Убедитесь, что импортировали в папку файл 'questions.txt'\n");
+        handle_sigint();
     }
 
     struct sockaddr_in server_addr;
@@ -751,7 +751,6 @@ int main() {
                 pending[pending_count].bytes_received = 0;
                 pending[pending_count].name[0] = '\0';
                 pending_count++;
-                printf("Новый игрок подключился (сокет %d), ожидаем имя...\n", client_sock);
             }
         }
 
@@ -818,7 +817,7 @@ int main() {
                     snprintf(s_name, sizeof(s_name), "%s", players[i]->name);
                     head = remove_player(head, players[i]->sock);
                     if (!head) {
-                        handle_sigint(0);
+                        handle_sigint();
                     }
                     char buffer[256];
                         int ready = 0;
@@ -878,20 +877,17 @@ int main() {
     // --- Викторина ---
     for (int q = 0; q < question_count; q++) {
 
-        struct sockaddr_in client_addr;
-        socklen_t client_len = sizeof(client_addr);
-
 
 
         process_round(head, q);
         notify_about_disconnected(head);
         head = cleanup_disconnected(head);
-        if (!head) handle_sigint(0);
+        if (!head) handle_sigint();
 
         send_results(head, q);
         notify_about_disconnected(head);
         head = cleanup_disconnected(head);
-        if (!head) handle_sigint(0);
+        if (!head) handle_sigint();
         sleep(2);
     }
 
