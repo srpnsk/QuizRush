@@ -185,6 +185,11 @@ void free_players(Player *head) {
   }
 }
 
+/* i dislike this func tbh...
+ * if we call this twice or more, we will generate a memory leak
+ * and lose all our data
+ * and if we dont call func twice or more, why we need this func???
+ */
 int load_questions(const char *filename) {
   FILE *file = fopen(filename, "r");
   if (!file) {
@@ -667,7 +672,7 @@ int main() {
   PendingPlayer pending[MAX_PLAYERS];
   int pending_count = 0;
 
-  Player *head = NULL;
+  // we cant reinitialize global variable in `main`!
   int next_id = 1;
 
   printf("Ожидаем игроков в лобби...\n");
